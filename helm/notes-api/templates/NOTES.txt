@@ -1,0 +1,16 @@
+1. Get the Notes API URL:
+
+  kubectl port-forward svc/{{ include "notes-api.fullname" . }} 8000:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+
+2. Once port-forward is running:
+
+  curl http://localhost:8000/healthz
+  curl http://localhost:8000/readyz
+  curl http://localhost:8000/notes
+  curl -X POST http://localhost:8000/notes \
+    -H 'content-type: application/json' \
+    -d '{"title":"hello","content":"world"}'
+
+3. Check pod status:
+
+  kubectl get pods -n {{ .Release.Namespace }}

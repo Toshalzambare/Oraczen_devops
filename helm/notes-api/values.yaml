@@ -1,0 +1,39 @@
+replicaCount: 1
+
+image:
+  repository: notes-api
+  tag: "local"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+postgresql:
+  image:
+    tag: "latest"
+  auth:
+    username: notes
+    password: ""
+    database: notes
+  primary:
+    persistence:
+      enabled: true
+      size: 1Gi
+
+metrics:
+  enabled: false
