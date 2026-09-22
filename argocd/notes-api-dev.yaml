@@ -1,21 +1,24 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: notes-api
+  name: notes-api-dev
   namespace: argocd
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/Toshalzambare/Oraczen_devops.git'
+    repoURL: https://github.com/Toshalzambare/Oraczen_devops.git
     targetRevision: add-helm-chart
     path: helm/notes-api
     helm:
       valueFiles:
+        - values.yaml
         - values-dev.yaml
   destination:
-    server: 'https://kubernetes.default.svc'
+    server: https://kubernetes.default.svc
     namespace: notes-dev
   syncPolicy:
+    # Dev uses automated sync with self-heal and prune.
+    # Lower risk environment — fast feedback loop is more valuable than caution.
     automated:
       prune: true
       selfHeal: true

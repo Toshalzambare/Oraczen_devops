@@ -1,95 +1,116 @@
 # DevOps Internship Assignment Write-up
 
-This write-up covers the end-to-end containerization, Helm charting, CI/CD pipeline creation, and GitOps rollout of the Notes API as per the assignment requirements.
+This write-up covers the end-to-end containerization, Helm charting, CI/CD pipeline creation, and GitOps rollout of the Notes API as per the assignment requirements, including all stretch goals.
 
 ## Part 1 — Containerization
 
 **What was built:**
-A multi-stage Dockerfile was created (`app/Dockerfile`) based on the slim `python:3.12-slim` image. 
-- **Builder Stage**: Installs all build dependencies and Python packages into a virtual environment or directly into system paths, keeping the heavy build tools (like `gcc`) out of the final image.
-- **Runtime Stage**: Copies only the built dependencies and the application code. It runs as a non-root user (`appuser` with UID 1000) for security.
-- **Healthcheck**: Kubernetes liveness and readiness probes are configured in the Helm chart instead of relying on Docker's `HEALTHCHECK`. In a Kubernetes environment, native probes (`/healthz` and `/readyz`) provide better integration with the scheduler (e.g. stopping traffic to unready pods) compared to Docker's internal mechanism.
+A multi-stage Dockerfile (`app/Dockerfile`) was constructed using `python:3.12-slim` as the base image.
+- **Builder Stage**: Installs all python dependencies into a temporary directory `/install`, keeping heavy build tools like `gcc` out of the final runtime image.
+- **Runtime Stage**: Copies the built dependencies from the builder stage. It creates a dedicated non-root user (`appuser` with UID 1000) and runs the application as this user, enforcing security best practices.
+- **Healthcheck**: We omitted Docker's `HEALTHCHECK` inside the Dockerfile because we rely natively on Kubernetes liveness and readiness probes configured in the Helm chart. Kubernetes probes are superior because they integrate directly with the cluster scheduler, automatically removing failing pods from service endpoints.
 
-**Commands run to verify:**
+**Verification Commands:**
 ```bash
 docker build -t notes-api:local -f app/Dockerfile app
-# Verified image size is minimal
-docker images | grep notes-api
-# Verified app runs locally and connects to DB
 docker run --rm -p 8000:8000 -e POSTGRES_HOST=host.docker.internal -e POSTGRES_PASSWORD=notes notes-api:local
 ```
-
-**Trade-offs/Future Improvements:**
-If more time permitted, I would implement image signing (`cosign`) or generate SBOMs (`cyclonedx`) during the build process to strengthen the software supply chain.
 
 ## Part 2 — Helm Chart & Database Dependency
 
 **What was built:**
-A complete Helm chart (`helm/notes-api`) was created. It manages the `Deployment`, `Service`, `ConfigMap`, `ServiceAccount`, `HorizontalPodAutoscaler`, and `PostgreSQL` subchart.
+A Helm chart (`helm/notes-api`) that manages the complete lifecycle of the `Deployment`, `Service`, `ConfigMap`, `ServiceAccount`, and `HorizontalPodAutoscaler`, alongside a `PostgreSQL` subchart.
 
 **Database Dependency & Secret Wiring:**
-*Question: How does the Helm chart handle the database dependency and secret wiring?*
-
-The chart declares `bitnami/postgresql` (v16.x) as a dependency in `Chart.yaml`. During deployment, Helm provisions both the API and the DB. We avoid hardcoding secrets by referencing the automatically generated PostgreSQL secret (`notes-api-postgresql`) inside our API `Deployment` using `secretKeyRef`:
+The chart explicitly declares the Bitnami PostgreSQL chart (`oci://registry-1.docker.io/bitnamicharts/postgresql`) as a dependency. By pulling this as a subchart, Helm provisions both the API and the Database simultaneously.
+**Crucially, we do not duplicate or hardcode the database password.** Instead, we leverage `secretKeyRef` in the `deployment.yaml` to dynamically read the auto-generated password created by the PostgreSQL subchart:
 ```yaml
-- name: POSTGRES_PASSWORD
-  valueFrom:
-    secretKeyRef:
-      name: {{ .Release.Name }}-postgresql
-      key: postgres-password
+env:
+  - name: POSTGRES_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: {{ .Release.Name }}-postgresql
+        key: password
 ```
-Other non-sensitive configuration values (`POSTGRES_HOST`, `POSTGRES_USER`, etc.) are securely passed via a `ConfigMap` using `envFrom`. This keeps sensitive credentials in Kubernetes Secrets and non-sensitive configuration in ConfigMaps, adhering to security best practices.
+Non-sensitive configurations (`POSTGRES_HOST`, `POSTGRES_USER`, etc.) are injected via `envFrom` pointing to our ConfigMap.
 
-**Commands run to verify:**
+**Environment Overrides:**
+We created meaningful differences between environments:
+- **`values-dev.yaml`**: Configured with 1 replica, HPA enabled for testing scaling, and PostgreSQL persistence disabled to save local disk space on the `kind` cluster.
+- **`values-prod.yaml`**: Configured with 3 replicas for HA, larger resource requests/limits, higher HPA bounds, and enabled PostgreSQL persistence (8Gi).
+
+**Verification Commands:**
 ```bash
 helm dependency build helm/notes-api
 helm lint helm/notes-api
 helm template notes-dev helm/notes-api -f helm/notes-api/values-dev.yaml
 helm install notes-dev helm/notes-api -f helm/notes-api/values-dev.yaml --namespace notes-dev --create-namespace
-# Verification of pod health
-kubectl get pods -n notes-dev
 ```
-Linting and templating were completely clean.
-
-**Environment Overrides:**
-`values-dev.yaml` and `values-prod.yaml` were created with meaningful differences:
-- **Dev**: Single replica, minimal resources, disabled persistence for PostgreSQL (to save disk space locally), HPA enabled for testing.
-- **Prod**: 3 replicas for high availability, PostgreSQL persistence enabled (8Gi), larger resource requests/limits, higher HPA bounds.
 
 ## Part 3 — CI Pipeline (GitHub Actions)
 
 **What was built:**
-A GitHub Actions workflow (`.github/workflows/ci.yaml`) that triggers on PRs and pushes to `main`.
-1. **Linting and Testing**: Uses `flake8` to catch syntax errors and `pytest` for unit testing.
-2. **Build and Scan**: Builds the Docker image and tags it with the Git SHA. It then runs Trivy (`aquasecurity/trivy-action`) to scan for vulnerabilities, failing the build on `HIGH` or `CRITICAL` findings. 
-3. **IaC Scan**: Runs a Trivy configuration scan against the Helm chart's rendered manifests to catch misconfigurations (e.g. running as root, missing limits) before they reach the cluster.
-
-**Trade-offs/Future Improvements:**
-Currently, we only build the image in CI. With a real registry (e.g. AWS ECR), we would add steps to authenticate using OIDC and push the image. The severity gate of `HIGH,CRITICAL` is a standard baseline that prevents major known exploits without blocking development on every low-severity issue in transitive dependencies.
+A GitHub Actions workflow (`.github/workflows/ci.yaml`) that triggers on pull requests and pushes to `main`.
+1. **Linting and Testing**: Enforces code hygiene with `ruff` and executes unit tests via `pytest`.
+2. **Build and Scan**: Builds the Docker image and tags it with the Git SHA. It then runs Trivy (`aquasecurity/trivy-action`) to scan the built image. We set the severity gate to `HIGH,CRITICAL` to catch actively exploitable vulnerabilities without failing the build on unactionable low-severity issues.
+3. **IaC Scan**: It renders the Helm chart into raw manifests and runs a Trivy config scan to detect misconfigurations (e.g. running as root, missing CPU limits) before deployment.
 
 ## Part 4 — GitOps with ArgoCD
 
 **What was built:**
-An ArgoCD Application (`argocd/application.yaml`) that tracks the `add-helm-chart` branch of the Git repository. The application points to `helm/notes-api` and uses `values-dev.yaml`.
+We defined two distinct ArgoCD Application manifests for GitOps: `argocd/notes-api-dev.yaml` (tracking the `add-helm-chart` branch for dev) and `argocd/notes-api-prod.yaml` (tracking `main`).
 
-**Sync Policy:**
-For the development environment, the sync policy is set to `Automated` with both `prune: true` and `selfHeal: true`. This ensures the cluster strictly matches the Git repository, reverting any manual `kubectl` changes (self-heal) and deleting resources removed from Git (prune). For a production environment, `selfHeal` is great, but `prune` might be configured manually or handled cautiously to prevent accidental deletion of critical stateful resources.
+**Sync Policy Reasoning:**
+- **Dev (`notes-api-dev.yaml`)**: Uses automated sync with `prune: true` and `selfHeal: true`. In dev, a fast feedback loop is prioritized. If a resource is removed from Git, we want it deleted from the cluster immediately.
+- **Prod (`notes-api-prod.yaml`)**: Uses manual sync. Automated sync with pruning in production is highly risky; an accidental bad merge to `main` could automatically delete running StatefulSets or databases. Human review is required before triggering a sync in production.
 
-*Question: If someone edits `values-prod.yaml` and merges it to `main`, what's the sequence of events from that merge to the new pod running? Where would you look if it didn't roll out?*
-
-1. **Sequence of Events**: The developer merges the PR into `main`. The CI pipeline runs, tests the code, builds the image, and pushes it. If the image tag changes, the repository is updated. ArgoCD's repository server polls GitHub (typically every 3 minutes) or receives a webhook. ArgoCD detects a divergence between the cluster state and the Git state. The Application controller then executes a sync, applying the new manifests to the cluster. Kubernetes then performs a rolling update of the Deployment to instantiate the new pods.
-2. **Troubleshooting**: If it didn't roll out, I would first check the ArgoCD UI or run `kubectl get application -n argocd` to check the `SYNC STATUS` and `HEALTH STATUS`. If the sync failed, I would describe the Application (`kubectl describe application notes-api -n argocd`) to view error messages (e.g., manifest syntax error, RBAC issue). If it synced but pods aren't running, I would check the Kubernetes events (`kubectl get events`) and the pod logs (`kubectl logs -l app.kubernetes.io/name=notes-api`) for CrashLoopBackOffs or readiness probe failures.
+**Rollout Sequence:**
+If a developer edits `values-prod.yaml` and merges to `main`:
+1. The CI pipeline triggers, testing the code, building the image, and scanning it.
+2. ArgoCD periodically polls GitHub (or receives a webhook). It detects the commit on `main`.
+3. Because production is set to manual sync, ArgoCD marks the application as `OutOfSync`.
+4. An engineer reviews the diff in the ArgoCD UI and clicks "Sync".
+5. ArgoCD applies the new manifests to the cluster.
+6. Kubernetes performs a rolling update of the Deployment to the new pod specification.
+If the rollout fails (e.g., ImagePullBackOff), I would look at the ArgoCD UI for the `Health Status` of the Deployment, or run `kubectl describe pod -l app.kubernetes.io/name=notes-api -n notes-prod` to see the exact event errors.
 
 ## Part 5 — Stretch Goals Implemented
 
-**Horizontal Pod Autoscaler (HPA):**
-An HPA template was added to the Helm chart (`templates/hpa.yaml`) using the `autoscaling/v2` API, which monitors CPU utilization (targeting 70%). It dynamically scales the Notes API replicas. To get this working on the local `kind` cluster, `metrics-server` was installed and patched with the `--kubelet-insecure-tls` argument.
+### 1. Monitoring Hooks
+We added `prometheus.io/scrape: "true"` annotations to the Pod template in the Helm chart. In a production environment using Prometheus Operator, we would define a `ServiceMonitor`:
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: notes-api-monitor
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notes-api
+  endpoints:
+  - port: http
+    path: /metrics
+```
+**Recommended Alerts:**
+1. **High Error Rate**: `rate(http_requests_total{status=~"5.."}[5m]) > 0.05` (Alert if >5% of requests are 500s).
+2. **Readiness Probe Flapping**: `changes(kube_pod_status_ready{condition="true"}[10m]) > 4` (Alert if pod readiness is unstable).
+3. **High Latency**: `histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 1.0` (Alert if 95p latency exceeds 1 second).
 
-**Secrets Management Proposal (GitOps):**
-Currently, PostgreSQL generates the secret dynamically. However, if we needed to inject external secrets (like API keys) via GitOps, storing them in `values-prod.yaml` in plain text is insecure. 
-**Proposal:** Use **External Secrets Operator (ESO)** backed by AWS Secrets Manager. 
-1. Store the secret in AWS Secrets Manager.
-2. Configure an `ExternalSecret` custom resource in the Helm chart instead of a standard `Secret`.
-3. Give the cluster an IAM Role (IRSA on EKS) allowing it to read the secret.
-4. The ESO will automatically fetch the secret from AWS and materialize it as a native Kubernetes `Secret` in the cluster.
-This ensures no secrets are stored in Git, keeping the GitOps pipeline fully declarative and secure.
+### 2. Autoscaling Under Load (HPA)
+The Helm chart includes an `autoscaling/v2` `HorizontalPodAutoscaler` which scales based on CPU utilization (targeting 70%).
+We verified this in `kind` by ensuring `metrics-server` was deployed and patched with `--kubelet-insecure-tls`. 
+A `load_test.sh` script is included in the repository that spams the `/notes` endpoint with POST requests in a loop. When executed (`./load_test.sh http://localhost:8000 120`), the CPU metric spikes, and running `kubectl get hpa -n notes-dev` confirms the replica count scaling dynamically from 1 to 3 pods.
+
+### 3. Secrets Management Proposal (External Secrets Operator)
+While the Postgres password is secure, injecting external API keys into Git via `values-prod.yaml` in plain text breaks GitOps security.
+**Proposal:** 
+1. Store plain-text secrets in **AWS Secrets Manager**.
+2. Install the **External Secrets Operator (ESO)** in the EKS cluster.
+3. Configure the cluster with an IAM Role (IRSA) allowing it to read the specific secret.
+4. Replace the standard Kubernetes `Secret` manifest with an `ExternalSecret` custom resource in the Helm chart.
+5. ESO automatically fetches the secret from AWS and materializes it as a native Kubernetes `Secret` on the cluster, keeping the Git repository 100% declarative and clear of sensitive data.
+
+### 4. Image Supply Chain
+To enhance software supply chain security, the CI pipeline can be extended:
+1. **Cosign**: After pushing the image, run `cosign sign --key cosign.key notes-api:${{ github.sha }}` to cryptographically sign the image. The cluster (via tools like Kyverno) can enforce that only signed images are deployed.
+2. **SBOM Generation**: Add a step `trivy image --format cyclonedx -o sbom.json notes-api:${{ github.sha }}` and upload `sbom.json` as a pipeline artifact for compliance tracking.
