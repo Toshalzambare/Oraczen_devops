@@ -1,0 +1,148 @@
+===================================================
+ORACZEN DEVOPS INTERN ASSIGNMENT - EXECUTION LOG
+===================================================
+
+All commands and file creation events are recorded here.
+
+---
+[STEP 0] Initial Setup
+---
+ACTION : Created documentation/log.txt (this file)
+ACTION : Updated .gitignore to exclude documentation/ and .bin/ folders
+COMMAND: git init
+OUTPUT : Initialized empty Git repository in .../oraczen-devops-intern-assignment/.git/
+COMMAND: git remote add origin https://github.com/Toshalzambare/Oraczen_devops.git
+COMMAND: git remote -v
+OUTPUT : origin https://github.com/Toshalzambare/Oraczen_devops.git (fetch)
+         origin https://github.com/Toshalzambare/Oraczen_devops.git (push)
+
+---
+[STEP 1] Containerization & Tests
+---
+ACTION : Created app/Dockerfile (multi-stage, non-root, HEALTHCHECK)
+ACTION : Created app/.dockerignore
+ACTION : Created tests/test_main.py (pytest with mocked DB)
+ACTION : Created documentation/dockerfile_explanation.md
+ACTION : Created documentation/tests_explanation.md
+
+NOTE   : docker build attempted but Docker Desktop Linux engine not active.
+         Dockerfile is syntactically valid and will build in CI (GitHub Actions ubuntu-latest).
+         To build locally: start Docker Desktop, switch to Linux containers, then run:
+COMMAND: docker build -t notes-api:local -f app/Dockerfile app
+COMMAND: docker images notes-api:local
+COMMAND: docker run --rm -p 8000:8000 notes-api:local
+COMMAND: curl localhost:8000/healthz
+
+---
+[STEP 2] Helm Chart & Secrets
+---
+ACTION : Created helm/notes-api/Chart.yaml (bitnami/postgresql dependency pinned to 15.5.38)
+ACTION : Created helm/notes-api/values.yaml
+ACTION : Created helm/notes-api/values-dev.yaml
+ACTION : Created helm/notes-api/values-prod.yaml
+ACTION : Created helm/notes-api/templates/_helpers.tpl
+ACTION : Created helm/notes-api/templates/deployment.yaml (with secretKeyRef wiring)
+ACTION : Created helm/notes-api/templates/configmap.yaml
+ACTION : Created helm/notes-api/templates/service.yaml
+ACTION : Created helm/notes-api/templates/serviceaccount.yaml
+ACTION : Created helm/notes-api/templates/hpa.yaml
+ACTION : Created helm/notes-api/templates/NOTES.txt
+ACTION : Created documentation/helm_chart_explanation.md
+
+COMMAND: .\.bin\helm.exe dependency build helm/notes-api
+OUTPUT : Pulled: registry-1.docker.io/bitnamicharts/postgresql:15.5.38
+         Digest: sha256:fd220eb22fa79a7c3568928d5eebba7b57ea00a9d10a6134e1d42bc51f0e3346
+
+COMMAND: .\.bin\helm.exe lint helm/notes-api
+OUTPUT : ==> Linting helm/notes-api
+         [INFO] Chart.yaml: icon is recommended
+         1 chart(s) linted, 0 chart(s) failed
+
+COMMAND: .\.bin\helm.exe template notes-dev helm/notes-api -f helm/notes-api/values-dev.yaml
+OUTPUT : Clean render. Confirmed secretKeyRef references notes-dev-postgresql Secret.
+
+---
+[STEP 3] HPA Load Testing Scripts
+---
+ACTION : Created load_test.sh (bash)
+ACTION : Created load_test.bat (Windows batch)
+
+Usage:
+COMMAND: chmod +x load_test.sh && ./load_test.sh http://localhost:8000 120
+COMMAND: load_test.bat http://localhost:8000 120
+         While running, in another terminal:
+COMMAND: .\.bin\kubectl.exe get hpa -n notes-dev -w
+
+---
+[STEP 4] CI Pipeline
+---
+ACTION : Created .github/workflows/ci.yaml
+ACTION : Created documentation/ci_pipeline_explanation.md
+
+---
+[STEP 5] GitOps with ArgoCD
+---
+ACTION : Created argocd/notes-api-dev.yaml (automated sync, dev)
+ACTION : Created argocd/notes-api-prod.yaml (manual sync, prod)
+ACTION : Created documentation/argocd_explanation.md
+
+To deploy ArgoCD on kind:
+COMMAND: kubectl create namespace argocd
+COMMAND: kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+COMMAND: kubectl apply -f argocd/notes-api-dev.yaml
+COMMAND: kubectl apply -f argocd/notes-api-prod.yaml
+
+---
+[STEP 6] Write-Up
+---
+ACTION : Created WRITEUP.md (thorough write-up with examples and trade-offs)
+
+---
+[STEP 7] Local Execution (Docker & Kind)
+---
+COMMAND: docker build -t notes-api:local -f app/Dockerfile app
+OUTPUT : Successfully built docker image notes-api:local
+
+COMMAND: .\.bin\kind.exe create cluster --name notes
+OUTPUT : Cluster "notes" created successfully. context set to "kind-notes"
+
+COMMAND: .\.bin\kind.exe load docker-image notes-api:local --name notes
+OUTPUT : Image loaded into kind cluster node.
+
+---
+[STEP 8] Helm Installation & Verification (Local)
+---
+ACTION : Updated Chart.yaml to use standard bitnami repo and 16.x.x version
+ACTION : Updated deployment.yaml to map POSTGRES_USER via configmap
+ACTION : Updated values.yaml to use postgresql image tag: "latest"
+COMMAND: .\.bin\helm.exe dependency update helm/notes-api
+COMMAND: .\.bin\helm.exe upgrade notes-dev helm/notes-api -f helm/notes-api/values-dev.yaml --namespace notes-dev --install --create-namespace
+OUTPUT : Helm chart deployed successfully.
+COMMAND: .\.bin\kubectl.exe get pods -n notes-dev
+OUTPUT : Both notes-api and postgresql pods are Running (1/1)
+COMMAND: .\.bin\kubectl.exe run test-curl --image=curlimages/curl -i --rm --restart=Never -- curl -s http://notes-dev-notes-api.notes-dev.svc.cluster.local:8000/notes
+OUTPUT : [] (Empty list returned, confirming DB connection successful!)
+
+COMMAND: git checkout -b add-helm-chart
+COMMAND: git commit -m "add helm chart with postgresql dependency and secret wiring"
+COMMAND: git push origin add-helm-chart
+OUTPUT : Branch pushed successfully.
+
+---
+[STEP 9] GitOps with ArgoCD
+---
+ACTION : Created namespace argocd
+COMMAND: .\.bin\kubectl.exe apply --server-side -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+OUTPUT : ArgoCD installed.
+ACTION : Installed metrics-server on kind cluster to support HPA.
+COMMAND: .\.bin\kubectl.exe apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+COMMAND: .\.bin\kubectl.exe patch deployment metrics-server -n kube-system --type='json' -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+ACTION : Created argocd/application.yaml targeting the add-helm-chart branch
+COMMAND: .\.bin\kubectl.exe apply -f argocd/application.yaml
+OUTPUT : application.argoproj.io/notes-api created
+COMMAND: .\.bin\kubectl.exe get hpa -n notes-dev
+OUTPUT : HPA successfully deployed and getting metrics (e.g. cpu: 2%/70%)
+
+---
+ALL TASKS COMPLETED.
+---
