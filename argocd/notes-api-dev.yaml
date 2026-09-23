@@ -7,12 +7,12 @@ spec:
   project: default
   source:
     repoURL: https://github.com/Toshalzambare/Oraczen_devops.git
-    targetRevision: add-helm-chart
+    targetRevision: main
     path: helm/notes-api
     helm:
       valueFiles:
         - values.yaml
-        - values-dev.yaml
+        - env/dev/values.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: notes-dev
