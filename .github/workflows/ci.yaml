@@ -26,6 +26,9 @@ jobs:
     name: Build & Scan
     runs-on: ubuntu-latest
     needs: lint-and-test
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +43,20 @@ jobs:
           exit-code: "1"
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push image to GHCR
+        run: |
+          # Convert username to lowercase to ensure valid docker image name
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          docker tag notes-api:${{ github.sha }} ghcr.io/$REPO_OWNER/notes-api:${{ github.sha }}
+          docker push ghcr.io/$REPO_OWNER/notes-api:${{ github.sha }}
 
   config-scan:
     name: IaC / Config Scan

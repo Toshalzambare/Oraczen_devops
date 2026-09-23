@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: notes-api
+  repository: ghcr.io/toshalzambare/notes-api
   tag: "local"
   pullPolicy: IfNotPresent
 
