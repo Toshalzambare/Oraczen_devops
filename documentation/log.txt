@@ -1,0 +1,191 @@
+===================================================
+ORACZEN DEVOPS INTERN ASSIGNMENT - EXECUTION LOG
+===================================================
+
+All commands and file creation events are recorded here.
+
+---
+[STEP 0] Initial Setup
+---
+ACTION : Created documentation/log.txt (this file)
+ACTION : Updated .gitignore to exclude documentation/ and .bin/ folders
+COMMAND: git init
+OUTPUT : Initialized empty Git repository in .../oraczen-devops-intern-assignment/.git/
+COMMAND: git remote add origin https://github.com/Toshalzambare/Oraczen_devops.git
+COMMAND: git remote -v
+OUTPUT : origin https://github.com/Toshalzambare/Oraczen_devops.git (fetch)
+         origin https://github.com/Toshalzambare/Oraczen_devops.git (push)
+
+---
+[STEP 1] Containerization & Tests
+---
+ACTION : Created app/Dockerfile (multi-stage, non-root, HEALTHCHECK)
+ACTION : Created app/.dockerignore
+ACTION : Created tests/test_main.py (pytest with mocked DB)
+ACTION : Created documentation/dockerfile_explanation.md
+ACTION : Created documentation/tests_explanation.md
+
+NOTE   : docker build attempted but Docker Desktop Linux engine not active.
+         Dockerfile is syntactically valid and will build in CI (GitHub Actions ubuntu-latest).
+         To build locally: start Docker Desktop, switch to Linux containers, then run:
+COMMAND: docker build -t notes-api:local -f app/Dockerfile app
+COMMAND: docker images notes-api:local
+COMMAND: docker run --rm -p 8000:8000 notes-api:local
+COMMAND: curl localhost:8000/healthz
+
+---
+[STEP 2] Helm Chart & Secrets
+---
+ACTION : Created helm/notes-api/Chart.yaml (bitnami/postgresql dependency pinned to 15.5.38)
+ACTION : Created helm/notes-api/values.yaml
+ACTION : Created helm/notes-api/values-dev.yaml
+ACTION : Created helm/notes-api/values-prod.yaml
+ACTION : Created helm/notes-api/templates/_helpers.tpl
+ACTION : Created helm/notes-api/templates/deployment.yaml (with secretKeyRef wiring)
+ACTION : Created helm/notes-api/templates/configmap.yaml
+ACTION : Created helm/notes-api/templates/service.yaml
+ACTION : Created helm/notes-api/templates/serviceaccount.yaml
+ACTION : Created helm/notes-api/templates/hpa.yaml
+ACTION : Created helm/notes-api/templates/NOTES.txt
+ACTION : Created documentation/helm_chart_explanation.md
+
+COMMAND: .\.bin\helm.exe dependency build helm/notes-api
+OUTPUT : Pulled: registry-1.docker.io/bitnamicharts/postgresql:15.5.38
+         Digest: sha256:fd220eb22fa79a7c3568928d5eebba7b57ea00a9d10a6134e1d42bc51f0e3346
+
+COMMAND: .\.bin\helm.exe lint helm/notes-api
+OUTPUT : ==> Linting helm/notes-api
+         [INFO] Chart.yaml: icon is recommended
+         1 chart(s) linted, 0 chart(s) failed
+
+COMMAND: .\.bin\helm.exe template notes-dev helm/notes-api -f helm/notes-api/values-dev.yaml
+OUTPUT : Clean render. Confirmed secretKeyRef references notes-dev-postgresql Secret.
+
+---
+[STEP 3] HPA Load Testing Scripts
+---
+ACTION : Created load_test.sh (bash)
+ACTION : Created load_test.bat (Windows batch)
+
+Usage:
+COMMAND: chmod +x load_test.sh && ./load_test.sh http://localhost:8000 120
+COMMAND: load_test.bat http://localhost:8000 120
+         While running, in another terminal:
+COMMAND: .\.bin\kubectl.exe get hpa -n notes-dev -w
+
+---
+[STEP 4] CI Pipeline
+---
+ACTION : Created .github/workflows/ci.yaml
+ACTION : Created documentation/ci_pipeline_explanation.md
+
+---
+[STEP 5] GitOps with ArgoCD
+---
+ACTION : Created argocd/notes-api-dev.yaml (automated sync, dev)
+ACTION : Created argocd/notes-api-prod.yaml (manual sync, prod)
+ACTION : Created documentation/argocd_explanation.md
+
+To deploy ArgoCD on kind:
+COMMAND: kubectl create namespace argocd
+COMMAND: kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+COMMAND: kubectl apply -f argocd/notes-api-dev.yaml
+COMMAND: kubectl apply -f argocd/notes-api-prod.yaml
+
+---
+[STEP 6] Write-Up
+---
+ACTION : Created WRITEUP.md (thorough write-up with examples and trade-offs)
+
+---
+[STEP 7] Local Execution (Docker & Kind)
+---
+COMMAND: docker build -t notes-api:local -f app/Dockerfile app
+OUTPUT : Successfully built docker image notes-api:local
+
+COMMAND: .\.bin\kind.exe create cluster --name notes
+OUTPUT : Cluster "notes" created successfully. context set to "kind-notes"
+
+COMMAND: .\.bin\kind.exe load docker-image notes-api:local --name notes
+OUTPUT : Image loaded into kind cluster node.
+
+---
+[STEP 8] Helm Installation & Verification (Local)
+---
+ACTION : Updated Chart.yaml to use standard bitnami repo and 16.x.x version
+ACTION : Updated deployment.yaml to map POSTGRES_USER via configmap
+ACTION : Updated values.yaml to use postgresql image tag: "latest"
+COMMAND: .\.bin\helm.exe dependency update helm/notes-api
+COMMAND: .\.bin\helm.exe upgrade notes-dev helm/notes-api -f helm/notes-api/values-dev.yaml --namespace notes-dev --install --create-namespace
+OUTPUT : Helm chart deployed successfully.
+COMMAND: .\.bin\kubectl.exe get pods -n notes-dev
+OUTPUT : Both notes-api and postgresql pods are Running (1/1)
+COMMAND: .\.bin\kubectl.exe run test-curl --image=curlimages/curl -i --rm --restart=Never -- curl -s http://notes-dev-notes-api.notes-dev.svc.cluster.local:8000/notes
+OUTPUT : [] (Empty list returned, confirming DB connection successful!)
+
+COMMAND: git checkout -b add-helm-chart
+COMMAND: git commit -m "add helm chart with postgresql dependency and secret wiring"
+COMMAND: git push origin add-helm-chart
+OUTPUT : Branch pushed successfully.
+
+---
+[STEP 9] GitOps with ArgoCD
+---
+ACTION : Created namespace argocd
+COMMAND: .\.bin\kubectl.exe apply --server-side -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+OUTPUT : ArgoCD installed.
+ACTION : Installed metrics-server on kind cluster to support HPA.
+COMMAND: .\.bin\kubectl.exe apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+COMMAND: .\.bin\kubectl.exe patch deployment metrics-server -n kube-system --type='json' -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+ACTION : Created argocd/application.yaml targeting the add-helm-chart branch
+COMMAND: .\.bin\kubectl.exe apply -f argocd/application.yaml
+OUTPUT : application.argoproj.io/notes-api created
+COMMAND: .\.bin\kubectl.exe get hpa -n notes-dev
+OUTPUT : HPA successfully deployed and getting metrics (e.g. cpu: 2%/70%)
+
+---
+[STEP 8] Dockerfile Refactor — venv multi-stage, remove custom user
+---
+ACTION : Refactored app/Dockerfile to use Python venv multi-stage pattern instead of --prefix approach.
+         Stage 1 (builder): creates /venv and installs all deps into it via /venv/bin/pip.
+         Stage 2 (runtime): copies /venv from builder, sets ENV PATH="/venv/bin:$PATH", runs as root (default).
+         Removed the addgroup/adduser/chown/USER lines entirely — simpler image.
+ACTION : Updated helm/notes-api/templates/deployment.yaml — removed pod-level securityContext
+         (runAsNonRoot: true / runAsUser: 1000 / fsGroup: 1000) since those required a dedicated
+         non-root user to exist inside the image, which we no longer create.
+COMMAND: docker build -t notes-api:local -f app/Dockerfile app
+OUTPUT : Successfully built and tagged notes-api:local (venv multi-stage, no custom user)
+COMMAND: .\.bin\kind load docker-image notes-api:local --name notes
+OUTPUT : Image "notes-api:local" loaded onto node "notes-control-plane"
+COMMAND: kubectl rollout restart deployment/notes-api-notes-api -n notes-dev
+OUTPUT : deployment.apps/notes-api-notes-api restarted
+NOTE   : First restart failed — pod CrashLoopBackOff due to postgres password mismatch.
+         Root cause: postgres StatefulSet (emptyDir) was restarted and re-initialized with
+         the current Secret password, but old pod was trying to connect with stale credentials.
+COMMAND: kubectl delete pod notes-api-postgresql-0 -n notes-dev
+OUTPUT : pod deleted — StatefulSet re-created it fresh with emptyDir, new password initialized correctly.
+COMMAND: kubectl delete pod -n notes-dev -l app.kubernetes.io/name=notes-api
+OUTPUT : Both stale API pods deleted — Deployment created fresh pod with new image.
+COMMAND: kubectl get pods -n notes-dev
+OUTPUT : notes-api-notes-api-67bfc85589-cjckm   1/1  Running
+         notes-api-postgresql-0                 1/1  Running
+COMMAND: kubectl port-forward svc/notes-api-notes-api -n notes-dev 8000:8000
+OUTPUT : Forwarding from 127.0.0.1:8000 -> 8000
+COMMAND: Invoke-RestMethod http://localhost:8000/readyz
+OUTPUT : status = ready   (HTTP 200 — DB connected successfully)
+COMMAND: Invoke-RestMethod -Method Post -Uri http://localhost:8000/notes -ContentType application/json -Body '{"title":"venv multi-stage test","content":"Running on kind with new Dockerfile"}'
+OUTPUT : id=1  title="venv multi-stage test"  created_at=2026-09-23T10:16:52.026095Z
+         (Write to database confirmed — full stack working with new Dockerfile)
+---
+[STEP 9] Revert to Port-Forwarding
+---
+ACTION : Removed metrics-server.yaml (was only used for local testing of HPA).
+ACTION : Removed helm/notes-api/templates/ingress.yaml template.
+ACTION : Reverted helm/notes-api/values.yaml (removed ingress block).
+ACTION : Reverted helm/notes-api/values-dev.yaml (removed NodePort and ingress blocks).
+ACTION : Reverted helm/notes-api/values-prod.yaml (removed ingress block).
+ACTION : Reverted WRITEUP.md to use `kubectl port-forward` commands for verification and load testing, as originally requested.
+
+---
+ALL TASKS COMPLETED.
+---

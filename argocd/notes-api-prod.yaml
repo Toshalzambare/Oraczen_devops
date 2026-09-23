@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: notes-api-prod
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Toshalzambare/Oraczen_devops.git
+    targetRevision: main
+    path: helm/notes-api
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: notes-prod
+  syncPolicy:
+    # Prod uses manual sync only. Automated sync + prune in prod is a risk:
+    # a bad merge to main can instantly delete running resources.
+    # A human must review and trigger the sync explicitly.
+    syncOptions:
+      - CreateNamespace=true
