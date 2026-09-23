@@ -22,10 +22,6 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: {{ include "notes-api.fullname" . }}
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
       containers:
         - name: notes-api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

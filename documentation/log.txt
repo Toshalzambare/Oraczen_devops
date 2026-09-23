@@ -144,5 +144,48 @@ COMMAND: .\.bin\kubectl.exe get hpa -n notes-dev
 OUTPUT : HPA successfully deployed and getting metrics (e.g. cpu: 2%/70%)
 
 ---
+[STEP 8] Dockerfile Refactor — venv multi-stage, remove custom user
+---
+ACTION : Refactored app/Dockerfile to use Python venv multi-stage pattern instead of --prefix approach.
+         Stage 1 (builder): creates /venv and installs all deps into it via /venv/bin/pip.
+         Stage 2 (runtime): copies /venv from builder, sets ENV PATH="/venv/bin:$PATH", runs as root (default).
+         Removed the addgroup/adduser/chown/USER lines entirely — simpler image.
+ACTION : Updated helm/notes-api/templates/deployment.yaml — removed pod-level securityContext
+         (runAsNonRoot: true / runAsUser: 1000 / fsGroup: 1000) since those required a dedicated
+         non-root user to exist inside the image, which we no longer create.
+COMMAND: docker build -t notes-api:local -f app/Dockerfile app
+OUTPUT : Successfully built and tagged notes-api:local (venv multi-stage, no custom user)
+COMMAND: .\.bin\kind load docker-image notes-api:local --name notes
+OUTPUT : Image "notes-api:local" loaded onto node "notes-control-plane"
+COMMAND: kubectl rollout restart deployment/notes-api-notes-api -n notes-dev
+OUTPUT : deployment.apps/notes-api-notes-api restarted
+NOTE   : First restart failed — pod CrashLoopBackOff due to postgres password mismatch.
+         Root cause: postgres StatefulSet (emptyDir) was restarted and re-initialized with
+         the current Secret password, but old pod was trying to connect with stale credentials.
+COMMAND: kubectl delete pod notes-api-postgresql-0 -n notes-dev
+OUTPUT : pod deleted — StatefulSet re-created it fresh with emptyDir, new password initialized correctly.
+COMMAND: kubectl delete pod -n notes-dev -l app.kubernetes.io/name=notes-api
+OUTPUT : Both stale API pods deleted — Deployment created fresh pod with new image.
+COMMAND: kubectl get pods -n notes-dev
+OUTPUT : notes-api-notes-api-67bfc85589-cjckm   1/1  Running
+         notes-api-postgresql-0                 1/1  Running
+COMMAND: kubectl port-forward svc/notes-api-notes-api -n notes-dev 8000:8000
+OUTPUT : Forwarding from 127.0.0.1:8000 -> 8000
+COMMAND: Invoke-RestMethod http://localhost:8000/readyz
+OUTPUT : status = ready   (HTTP 200 — DB connected successfully)
+COMMAND: Invoke-RestMethod -Method Post -Uri http://localhost:8000/notes -ContentType application/json -Body '{"title":"venv multi-stage test","content":"Running on kind with new Dockerfile"}'
+OUTPUT : id=1  title="venv multi-stage test"  created_at=2026-09-23T10:16:52.026095Z
+         (Write to database confirmed — full stack working with new Dockerfile)
+---
+[STEP 9] Revert to Port-Forwarding
+---
+ACTION : Removed metrics-server.yaml (was only used for local testing of HPA).
+ACTION : Removed helm/notes-api/templates/ingress.yaml template.
+ACTION : Reverted helm/notes-api/values.yaml (removed ingress block).
+ACTION : Reverted helm/notes-api/values-dev.yaml (removed NodePort and ingress blocks).
+ACTION : Reverted helm/notes-api/values-prod.yaml (removed ingress block).
+ACTION : Reverted WRITEUP.md to use `kubectl port-forward` commands for verification and load testing, as originally requested.
+
+---
 ALL TASKS COMPLETED.
 ---

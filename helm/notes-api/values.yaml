@@ -37,3 +37,4 @@ postgresql:
 
 metrics:
   enabled: false
+
