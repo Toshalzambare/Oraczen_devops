@@ -22,14 +22,26 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: {{ include "notes-api.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
       containers:
         - name: notes-api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: http
               containerPort: 8000
               protocol: TCP
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           envFrom:
             - configMapRef:
                 name: {{ include "notes-api.fullname" . }}-config
@@ -58,3 +70,6 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
