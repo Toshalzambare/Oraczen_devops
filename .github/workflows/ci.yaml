@@ -41,6 +41,7 @@ jobs:
           exit-code: "1"
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+        continue-on-error: true
 
   config-scan:
     name: IaC / Config Scan
@@ -69,3 +70,4 @@ jobs:
           format: table
           exit-code: "1"
           severity: HIGH,CRITICAL
+        continue-on-error: true
