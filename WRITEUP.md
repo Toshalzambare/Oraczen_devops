@@ -163,7 +163,7 @@ The manifests point to the Helm chart in the Git repository and define the speci
 ### Commands Used
 ```bash
 kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl apply --server-side -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 kubectl apply -f argocd/notes-api-dev.yaml
 kubectl apply -f argocd/notes-api-prod.yaml
 ```
