@@ -6,62 +6,71 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from database import Base
+import models
+from main import app, get_db
+
+# Create an in-memory SQLite database for testing
+engine = create_engine(
+    "sqlite:///:memory:", 
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool
+)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def override_get_db():
+    try:
+        db = TestingSessionLocal()
+        yield db
+    finally:
+        db.close()
+
+app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture
 def client():
-    with patch('database.wait_for_db'), \
-         patch('database.engine'), \
-         patch('database.Base') as mock_base:
-        mock_base.metadata.create_all = MagicMock()
-        from main import app
+    # Patch the wait_for_db function to bypass DB wait on app startup
+    with patch('main.wait_for_db'), patch('main.engine', engine):
+        Base.metadata.create_all(bind=engine)
         with TestClient(app) as c:
             yield c
-
+        Base.metadata.drop_all(bind=engine)
 
 def test_healthz(client):
     r = client.get("/healthz")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
 
-
 def test_root(client):
     r = client.get("/")
     assert r.status_code == 200
     assert r.json()["service"] == "notes-api"
 
-
 def test_readyz_db_unavailable(client):
+    # To test the failure, we mock the dependency specifically for this test
     from sqlalchemy.exc import OperationalError
-    with patch('main.get_db') as mock_get_db:
+    def override_get_db_fail():
         mock_db = MagicMock()
         mock_db.execute.side_effect = OperationalError("conn", {}, Exception("db down"))
-        mock_get_db.return_value = iter([mock_db])
-        r = client.get("/readyz")
-        assert r.status_code == 503
-
+        yield mock_db
+    
+    app.dependency_overrides[get_db] = override_get_db_fail
+    r = client.get("/readyz")
+    assert r.status_code == 503
+    app.dependency_overrides[get_db] = override_get_db # Restore override
 
 def test_create_note(client):
-    with patch('main.get_db') as mock_get_db:
-        mock_db = MagicMock()
-        mock_note = MagicMock()
-        mock_note.id = 1
-        mock_note.title = "hello"
-        mock_note.content = "world"
-        mock_note.created_at = None
-        mock_db.add = MagicMock()
-        mock_db.commit = MagicMock()
-        mock_db.refresh = MagicMock()
-        mock_get_db.return_value = iter([mock_db])
-        with patch('models.Note', return_value=mock_note):
-            r = client.post("/notes", json={"title": "hello", "content": "world"})
-        assert r.status_code in (200, 201, 422, 500)
-
+    r = client.post("/notes", json={"title": "hello", "content": "world"})
+    assert r.status_code == 201
+    data = r.json()
+    assert data["title"] == "hello"
+    assert data["content"] == "world"
+    assert "id" in data
 
 def test_list_notes_empty(client):
-    with patch('main.get_db') as mock_get_db:
-        mock_db = MagicMock()
-        mock_db.query.return_value.order_by.return_value.all.return_value = []
-        mock_get_db.return_value = iter([mock_db])
-        r = client.get("/notes")
-        assert r.status_code == 200
-        assert r.json() == []
+    r = client.get("/notes")
+    assert r.status_code == 200
+    assert r.json() == []
